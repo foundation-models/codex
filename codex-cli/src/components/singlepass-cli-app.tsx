@@ -393,11 +393,24 @@ export function SinglePassApp({
         files,
       });
 
-      const openai = new OpenAI({
-        apiKey: config.apiKey ?? "",
-        baseURL: OPENAI_BASE_URL || undefined,
-        timeout: OPENAI_TIMEOUT_MS,
-      });
+      let openai;
+      if (config.azureConfig) {
+        // Initialize Azure OpenAI client
+        openai = new OpenAI({
+          apiKey: config.azureConfig.apiKey,
+          baseURL: config.azureConfig.endpoint,
+          defaultQuery: { 'api-version': config.azureConfig.apiVersion },
+          defaultHeaders: { 'api-key': config.azureConfig.apiKey },
+        });
+      } else {
+        // Initialize standard OpenAI client
+        openai = new OpenAI({
+          apiKey: config.apiKey ?? "",
+          baseURL: OPENAI_BASE_URL || undefined,
+          timeout: OPENAI_TIMEOUT_MS,
+        });
+      }
+
       const chatResp = await openai.beta.chat.completions.parse({
         model: config.model,
         messages: [

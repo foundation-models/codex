@@ -205,27 +205,44 @@ if (cli.flags.config) {
 // ---------------------------------------------------------------------------
 
 const apiKey = process.env["OPENAI_API_KEY"];
+const azureApiKey = process.env["AZURE_OPENAI_API_KEY"];
+const azureEndpoint = process.env["AZURE_OPENAI_ENDPOINT"];
 
-if (!apiKey) {
+let config = loadConfig(undefined, undefined, {
+  cwd: process.cwd(),
+  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
+  projectDocPath: cli.flags.projectDoc as string | undefined,
+  isFullContext: Boolean(cli.flags.fullContext),
+});
+
+// If Azure OpenAI is configured, use those credentials
+if (azureApiKey && azureEndpoint) {
+  config = {
+    ...config,
+    apiKey: azureApiKey,
+    azureConfig: {
+      apiVersion: process.env["AZURE_OPENAI_API_VERSION"] || "2024-08-01-preview",
+      endpoint: azureEndpoint,
+      apiKey: azureApiKey,
+      deployment: process.env["AZURE_OPENAI_DEPLOYMENT"] || "",
+    }
+  };
+} else if (!apiKey) {
   // eslint-disable-next-line no-console
   console.error(
-    `\n${chalk.red("Missing OpenAI API key.")}\n\n` +
-      `Set the environment variable ${chalk.bold("OPENAI_API_KEY")} ` +
-      `and re-run this command.\n` +
-      `You can create a key here: ${chalk.bold(
+    `\n${chalk.red("Missing API key configuration.")}\n\n` +
+      `Set either:\n` +
+      `- Standard OpenAI: ${chalk.bold("OPENAI_API_KEY")} environment variable\n` +
+      `- Azure OpenAI: ${chalk.bold("AZURE_OPENAI_API_KEY")} and ${chalk.bold("AZURE_OPENAI_ENDPOINT")} environment variables\n\n` +
+      `You can create an OpenAI key here: ${chalk.bold(
         chalk.underline("https://platform.openai.com/account/api-keys"),
-      )}\n`,
+      )}\n` +
+      `For Azure OpenAI, use your Azure portal to get the endpoint and API key.\n`,
   );
   process.exit(1);
 }
 
 const fullContextMode = Boolean(cli.flags.fullContext);
-let config = loadConfig(undefined, undefined, {
-  cwd: process.cwd(),
-  disableProjectDoc: Boolean(cli.flags.noProjectDoc),
-  projectDocPath: cli.flags.projectDoc as string | undefined,
-  isFullContext: fullContextMode,
-});
 
 const prompt = cli.input[0];
 const model = cli.flags.model;

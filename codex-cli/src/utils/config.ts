@@ -36,6 +36,12 @@ export const OPENAI_TIMEOUT_MS =
 export const OPENAI_BASE_URL = process.env["OPENAI_BASE_URL"] || "";
 export let OPENAI_API_KEY = process.env["OPENAI_API_KEY"] || "";
 
+// Azure OpenAI configuration
+export const AZURE_OPENAI_API_VERSION = process.env["AZURE_OPENAI_API_VERSION"] || "2024-08-01-preview";
+export const AZURE_OPENAI_ENDPOINT = process.env["AZURE_OPENAI_ENDPOINT"] || "";
+export const AZURE_OPENAI_API_KEY = process.env["AZURE_OPENAI_API_KEY"] || "";
+export const AZURE_OPENAI_DEPLOYMENT = process.env["AZURE_OPENAI_DEPLOYMENT"] || "";
+
 export function setApiKey(apiKey: string): void {
   OPENAI_API_KEY = apiKey;
 }
@@ -46,6 +52,7 @@ export const PRETTY_PRINT = Boolean(process.env["PRETTY_PRINT"] || "");
 // Represents config as persisted in config.json.
 export type StoredConfig = {
   model?: string;
+  apiKey?: string;
   approvalMode?: AutoApprovalMode;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
@@ -54,6 +61,12 @@ export type StoredConfig = {
     saveHistory?: boolean;
     sensitivePatterns?: Array<string>;
   };
+  azureConfig?: {
+    apiVersion: string;
+    endpoint: string;
+    apiKey: string;
+    deployment: string;
+  };
 };
 
 // Minimal config written on first run.  An *empty* model string ensures that
@@ -61,7 +74,7 @@ export type StoredConfig = {
 // propagating to existing users until they explicitly set a model.
 export const EMPTY_STORED_CONFIG: StoredConfig = { model: "" };
 
-// Pre‑stringified JSON variant so we don’t stringify repeatedly.
+// Pre‑stringified JSON variant so we don't stringify repeatedly.
 const EMPTY_CONFIG_JSON = JSON.stringify(EMPTY_STORED_CONFIG, null, 2) + "\n";
 
 export type MemoryConfig = {
@@ -79,6 +92,12 @@ export type AppConfig = {
     maxSize: number;
     saveHistory: boolean;
     sensitivePatterns: Array<string>;
+  };
+  azureConfig?: {
+    apiVersion: string;
+    endpoint: string;
+    apiKey: string;
+    deployment: string;
   };
 };
 
@@ -197,148 +216,57 @@ export const loadConfig = (
     }
   }
 
+  // Load stored config
   let storedConfig: StoredConfig = {};
   if (existsSync(actualConfigPath)) {
-    const raw = readFileSync(actualConfigPath, "utf-8");
-    const ext = extname(actualConfigPath).toLowerCase();
-    try {
-      if (ext === ".yaml" || ext === ".yml") {
-        storedConfig = loadYaml(raw) as unknown as StoredConfig;
-      } else {
-        storedConfig = JSON.parse(raw);
-      }
-    } catch {
-      // If parsing fails, fall back to empty config to avoid crashing.
-      storedConfig = {};
-    }
-  }
-
-  const instructionsFilePathResolved =
-    instructionsPath ?? INSTRUCTIONS_FILEPATH;
-  const userInstructions = existsSync(instructionsFilePathResolved)
-    ? readFileSync(instructionsFilePathResolved, "utf-8")
-    : DEFAULT_INSTRUCTIONS;
-
-  // Project doc support.
-  const shouldLoadProjectDoc =
-    !options.disableProjectDoc &&
-    process.env["CODEX_DISABLE_PROJECT_DOC"] !== "1";
-
-  let projectDoc = "";
-  let projectDocPath: string | null = null;
-  if (shouldLoadProjectDoc) {
-    const cwd = options.cwd ?? process.cwd();
-    projectDoc = loadProjectDoc(cwd, options.projectDocPath);
-    projectDocPath = options.projectDocPath
-      ? resolvePath(cwd, options.projectDocPath)
-      : discoverProjectDocPath(cwd);
-    if (projectDocPath) {
-      if (isLoggingEnabled()) {
-        log(
-          `[codex] Loaded project doc from ${projectDocPath} (${projectDoc.length} bytes)`,
-        );
-      }
+    const ext = extname(actualConfigPath);
+    if (ext === ".yaml" || ext === ".yml") {
+      storedConfig = loadYaml(readFileSync(actualConfigPath, "utf8")) as StoredConfig;
     } else {
-      if (isLoggingEnabled()) {
-        log(`[codex] No project doc found in ${cwd}`);
-      }
+      storedConfig = JSON.parse(readFileSync(actualConfigPath, "utf8"));
     }
   }
 
-  const combinedInstructions = [userInstructions, projectDoc]
-    .filter((s) => s && s.trim() !== "")
-    .join("\n\n--- project-doc ---\n\n");
+  // Load instructions
+  let instructions = "";
+  if (existsSync(instructionsPath)) {
+    instructions = readFileSync(instructionsPath, "utf8");
+  }
 
-  // Treat empty string ("" or whitespace) as absence so we can fall back to
-  // the latest DEFAULT_MODEL.
-  const storedModel =
-    storedConfig.model && storedConfig.model.trim() !== ""
-      ? storedConfig.model.trim()
-      : undefined;
+  // Load project doc if enabled
+  if (!options.disableProjectDoc) {
+    const projectDoc = loadProjectDoc(
+      options.cwd || process.cwd(),
+      options.projectDocPath,
+    );
+    if (projectDoc) {
+      instructions = `${instructions}\n\n${projectDoc}`;
+    }
+  }
 
-  const config: AppConfig = {
-    model:
-      storedModel ??
-      (options.isFullContext
-        ? DEFAULT_FULL_CONTEXT_MODEL
-        : DEFAULT_AGENTIC_MODEL),
-    instructions: combinedInstructions,
+  // Merge Azure OpenAI config from environment if not in stored config
+  if (!storedConfig.azureConfig) {
+    storedConfig.azureConfig = {
+      apiVersion: AZURE_OPENAI_API_VERSION || "2024-08-01-preview",
+      endpoint: AZURE_OPENAI_ENDPOINT || "",
+      apiKey: AZURE_OPENAI_API_KEY || "",
+      deployment: AZURE_OPENAI_DEPLOYMENT || "",
+    };
+  }
+
+  return {
+    apiKey: storedConfig.apiKey,
+    model: storedConfig.model || (options.isFullContext ? DEFAULT_FULL_CONTEXT_MODEL : DEFAULT_AGENTIC_MODEL),
+    instructions,
+    fullAutoErrorMode: storedConfig.fullAutoErrorMode,
+    memory: storedConfig.memory,
+    history: {
+      maxSize: storedConfig.history?.maxSize || 100,
+      saveHistory: storedConfig.history?.saveHistory ?? true,
+      sensitivePatterns: storedConfig.history?.sensitivePatterns || [],
+    },
+    azureConfig: storedConfig.azureConfig,
   };
-
-  // -----------------------------------------------------------------------
-  // First‑run bootstrap: if the configuration file (and/or its containing
-  // directory) didn't exist we create them now so that users end up with a
-  // materialised ~/.codex/config.json file on first execution.  This mirrors
-  // what `saveConfig()` would do but without requiring callers to remember to
-  // invoke it separately.
-  //
-  // We intentionally perform this *after* we have computed the final
-  // `config` object so that we can just persist the resolved defaults.  The
-  // write operations are guarded by `existsSync` checks so that subsequent
-  // runs that already have a config will remain read‑only here.
-  // -----------------------------------------------------------------------
-
-  try {
-    if (!existsSync(actualConfigPath)) {
-      // Ensure the directory exists first.
-      const dir = dirname(actualConfigPath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
-      }
-
-      // Persist a minimal config – we include the `model` key but leave it as
-      // an empty string so that `loadConfig()` treats it as "unset" and falls
-      // back to whatever DEFAULT_MODEL is current at runtime.  This prevents
-      // pinning users to an old default after upgrading Codex.
-      const ext = extname(actualConfigPath).toLowerCase();
-      if (ext === ".yaml" || ext === ".yml") {
-        writeFileSync(actualConfigPath, dumpYaml(EMPTY_STORED_CONFIG), "utf-8");
-      } else {
-        writeFileSync(actualConfigPath, EMPTY_CONFIG_JSON, "utf-8");
-      }
-    }
-
-    // Always ensure the instructions file exists so users can edit it.
-    if (!existsSync(instructionsFilePathResolved)) {
-      const instrDir = dirname(instructionsFilePathResolved);
-      if (!existsSync(instrDir)) {
-        mkdirSync(instrDir, { recursive: true });
-      }
-      writeFileSync(instructionsFilePathResolved, userInstructions, "utf-8");
-    }
-  } catch {
-    // Silently ignore any errors – failure to persist the defaults shouldn't
-    // block the CLI from starting.  A future explicit `codex config` command
-    // or `saveConfig()` call can handle (re‑)writing later.
-  }
-
-  // Only include the "memory" key if it was explicitly set by the user. This
-  // preserves backward‑compatibility with older config files (and our test
-  // fixtures) that don't include a "memory" section.
-  if (storedConfig.memory !== undefined) {
-    config.memory = storedConfig.memory;
-  }
-
-  if (storedConfig.fullAutoErrorMode) {
-    config.fullAutoErrorMode = storedConfig.fullAutoErrorMode;
-  }
-
-  // Add default history config if not provided
-  if (storedConfig.history !== undefined) {
-    config.history = {
-      maxSize: storedConfig.history.maxSize ?? 1000,
-      saveHistory: storedConfig.history.saveHistory ?? true,
-      sensitivePatterns: storedConfig.history.sensitivePatterns ?? [],
-    };
-  } else {
-    config.history = {
-      maxSize: 1000,
-      saveHistory: true,
-      sensitivePatterns: [],
-    };
-  }
-
-  return config;
 };
 
 export const saveConfig = (
