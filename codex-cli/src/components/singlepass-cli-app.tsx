@@ -395,6 +395,7 @@ export function SinglePassApp({
 
       let openai;
       if (config.azureConfig) {
+        console.log('Using Azure OpenAI configuration');
         // Initialize Azure OpenAI client
         openai = new OpenAI({
           apiKey: config.azureConfig.apiKey,
@@ -403,7 +404,7 @@ export function SinglePassApp({
           defaultHeaders: { 'api-key': config.azureConfig.apiKey },
         });
       } else {
-        // Initialize standard OpenAI client
+        console.log('Using standard OpenAI configuration');        // Initialize standard OpenAI client
         openai = new OpenAI({
           apiKey: config.apiKey ?? "",
           baseURL: OPENAI_BASE_URL || undefined,

@@ -219,7 +219,6 @@ let config = loadConfig(undefined, undefined, {
 if (azureApiKey && azureEndpoint) {
   config = {
     ...config,
-    apiKey: azureApiKey,
     azureConfig: {
       apiVersion: process.env["AZURE_OPENAI_API_VERSION"] || "2024-08-01-preview",
       endpoint: azureEndpoint,
@@ -249,7 +248,6 @@ const model = cli.flags.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
 
 config = {
-  apiKey,
   ...config,
   model: model ?? config.model,
 };
